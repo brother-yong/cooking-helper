@@ -1,8 +1,14 @@
 # Cooking Helper (Telegram bot)
 
 A tiny Telegram bot that helps a nervous home cook make food tastier and juicier.
-You text it what you're cooking; it texts back simple flavour + moisture tips.
+You chat with it - tell it what you're cooking, what you have, or ask for an easy
+idea - and it replies with simple flavour + moisture tips and timings. It remembers
+the last few messages so you can ask follow-up questions.
 Powered by Google Gemini (free tier). Built to run $0 on Render's free tier.
+
+The bot keeps the last few chat messages in temporary memory (RAM) so follow-ups
+make sense. This is never written to disk or a database, and it is wiped whenever
+the service restarts or goes idle. Nothing is permanently stored.
 
 ## Safe to be public
 No secrets live in this repo. The Gemini key, Telegram token, and webhook password
