@@ -1,0 +1,11 @@
+# Never commit secrets or local junk
+.env
+*.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Personal working notes - keep these local, not on public GitHub
+CLAUDE.md
+MEMORY.md

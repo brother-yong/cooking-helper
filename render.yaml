@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: cooking-helper
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      # All set in the Render dashboard, never in this repo. sync:false = secret.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
