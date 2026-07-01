@@ -13,3 +13,5 @@ services:
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
+      - key: PEXELS_API_KEY
+        sync: false

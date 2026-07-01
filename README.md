@@ -21,6 +21,7 @@ are read from environment variables and are only set in Render's dashboard.
 | `GEMINI_API_KEY` | Your key from aistudio.google.com |
 | `TELEGRAM_TOKEN` | The token @BotFather gave you when you made the bot |
 | `WEBHOOK_SECRET`  | Any random password you make up (e.g. 20 random letters/numbers) |
+| `PEXELS_API_KEY`  | Optional. Free key from pexels.com/api to show a dish photo. If unset, the bot just skips photos. |
 
 ## Deploy (one time)
 1. Push this folder to a GitHub repo.
