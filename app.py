@@ -146,8 +146,14 @@ def telegram():
     if not chat_id:
         return "ok"  # nothing to reply to (sticker, photo, edited message, etc.)
 
-    if text.startswith("/start"):
+    low = text.lower()
+
+    if low.startswith("/start"):
         HISTORY.pop(chat_id, None)  # fresh conversation
+        tg("sendMessage", {"chat_id": chat_id, "text": WELCOME, "reply_markup": KEYBOARD})
+        return "ok"
+
+    if low.startswith("/help"):
         tg("sendMessage", {"chat_id": chat_id, "text": WELCOME, "reply_markup": KEYBOARD})
         return "ok"
 
@@ -156,7 +162,10 @@ def telegram():
                            "text": "Just tap a button or type what you're cooking, and I'll help."})
         return "ok"
 
-    if text in BUTTON_PROMPTS:
+    if low.startswith("/idea"):
+        tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        reply = coach(chat_id, "Please give me one easy dish idea to cook.")
+    elif text in BUTTON_PROMPTS:
         reply = BUTTON_PROMPTS[text]
         remember(chat_id, "user", text)     # so her next message has context
         remember(chat_id, "model", reply)
