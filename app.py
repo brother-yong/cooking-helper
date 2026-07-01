@@ -2,6 +2,7 @@ import os
 import re
 import json
 import urllib.request
+import urllib.parse
 from collections import defaultdict
 from flask import Flask, request, abort
 from google import genai
@@ -13,35 +14,37 @@ app = Flask(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")  # must match the secret_token set on the webhook
+PEXELS_KEY = os.environ.get("PEXELS_API_KEY")      # optional; if unset, the bot just skips photos
 
 MODEL = "gemini-2.5-flash"          # free-tier model; change here if it ever stops being free
 MAX_INPUT = 300                     # ponytail: one message is short; cap stops giant pastes
 MAX_TURNS = 8                       # remember last 8 messages (~4 back-and-forths) for follow-ups
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-SYSTEM_PROMPT = """You are a warm, patient cooking coach chatting with a nervous home cook on her phone.
-Her food often comes out bland and dry and she gets criticised at home. Build her confidence; never make her feel judged or rushed.
+SYSTEM_PROMPT = """You are Chef Tan, a calm, practical cooking coach helping a nervous home cook on her phone.
+Her food often comes out bland and dry. Your job is to give steps that reliably work.
 
-You are chatting back and forth. She may ask follow-up questions or raise worries like "it's still dry" or "is it cooked yet?" - answer them simply and kindly, using what was said earlier in the chat.
+Before you answer, think it through carefully and check yourself: are the steps correct, in the right order, and will they actually fix flavour and moisture for THIS food? Reason about WHY each tip works (the cooking reason) so your advice is sound. Keep this thinking to yourself - do not write it out.
 
-She might do one of these:
-- Tell you a dish she is already cooking -> help her make THAT dish tasty and juicy.
-- Tell you what ingredients she has -> suggest ONE simple, beginner-friendly thing to cook with them, then how to make it tasty and juicy.
-- Ask for an easy idea -> suggest ONE simple, cheap, hard-to-mess-up dish using common ingredients, then how to cook it.
+Get straight to the point. Skip small talk and praise. Do NOT explain the reasons in your reply unless she asks "why" - then explain simply. Stay kind, just brief.
 
-Always focus on her two real problems:
-1. FLAVOUR - season it well (salt early, aromatics like garlic/ginger/onion, a sauce, a small squeeze of acid like lime or vinegar at the end).
-2. MOISTURE - keep it from drying out (right heat, don't overcook, a quick marinade, rest meat a few minutes after cooking).
+You are chatting back and forth, so use what was said earlier. She might:
+- Name a dish she is cooking -> help her make THAT tasty and juicy.
+- List ingredients she has -> suggest ONE simple, beginner-friendly dish.
+- Ask for an easy idea -> give ONE simple, cheap, hard-to-mess-up dish.
+- Raise a worry like "it's still dry" -> answer it simply, using the earlier chat.
 
-VERY IMPORTANT - she needs timings. For every cooking step, give a simple time and heat, for example "medium heat, 3 to 4 minutes each side". Never say "until done" without also giving a rough time.
+Always cover her two problems:
+1. FLAVOUR - season well (salt early, aromatics like garlic/ginger/onion, a sauce, a squeeze of acid like lime or vinegar at the end).
+2. MOISTURE - stop it drying out (right heat, don't overcook, a quick marinade, rest meat a few minutes after cooking).
 
-How to reply:
-- Plain, simple English. No chef jargon. Keep it short.
-- A few clear numbered steps, not a wall of text.
-- Kind and encouraging. She is nervous; reassure her.
-- Plain text only. No markdown, no asterisks, no hash symbols, no bold.
-- Do NOT add a closing disclaimer; that line is added separately.
-- If she asks something not about cooking, gently say you only help with cooking and ask what she is making."""
+Answer format (plain text only - no markdown, no asterisks, no hash symbols):
+- A few short numbered steps.
+- Every step gives a simple time and heat, for example "medium heat, 3 to 4 minutes each side". Never say "until done" without a rough time.
+- End with a line starting "Try next:" giving one or two quick suggestions (a variation, a side, or a small upgrade).
+- After the Try next line, add ONE final line for the system only: PHOTO: two to four words naming the finished dish (example: PHOTO: chicken fried rice). Only add this when you gave cooking steps for a dish - never for quick follow-up answers or non-cooking replies. She will not see this line.
+- Do NOT add any closing disclaimer; that line is added separately.
+- If she asks something not about cooking, briefly say you only help with cooking and ask what she is making."""
 
 TAGLINE = "These are just ideas to help - trust your own taste."
 WELCOME = ("Hi! I'm your cooking helper. I'll help your food taste good and stay juicy, "
@@ -97,10 +100,27 @@ def remember(chat_id, role, text):
     del h[:-MAX_TURNS]
 
 
+def dish_photo(query):
+    """Fetch one real photo of the dish from Pexels (free). Returns an image URL, or None."""
+    if not PEXELS_KEY:
+        return None
+    try:
+        url = "https://api.pexels.com/v1/search?" + urllib.parse.urlencode(
+            {"query": query, "per_page": 1, "orientation": "landscape"})
+        req = urllib.request.Request(url, headers={"Authorization": PEXELS_KEY})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.load(r)
+        photos = data.get("photos") or []
+        return photos[0]["src"]["large"] if photos else None
+    except Exception:
+        return None
+
+
 def coach(chat_id, question):
-    """Run the message (with recent chat history) through Gemini and return a reply."""
+    """Run the message (with recent chat history) through Gemini.
+    Returns (reply_text, photo_query) where photo_query may be None."""
     if client is None:
-        return "The bot isn't set up yet (missing API key). Let Yong Han know."
+        return "The bot isn't set up yet (missing API key). Let Yong Han know.", None
     contents = HISTORY[chat_id] + [{"role": "user", "parts": [{"text": question}]}]
     try:
         resp = client.models.generate_content(
@@ -108,22 +128,29 @@ def coach(chat_id, question):
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                temperature=0.8,
-                max_output_tokens=700,
-                # 2.5-flash spends output budget on hidden "thinking" and truncates the
-                # visible answer. This app is simple; turn it off for full, fast replies.
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                temperature=0.7,
+                # Thinking ON so it reasons and self-checks before answering. Budget is
+                # counted inside max_output_tokens, so keep max well above the budget or
+                # the visible answer gets starved and cut short.
+                max_output_tokens=2048,
+                thinking_config=types.ThinkingConfig(thinking_budget=1024),
             ),
         )
         text = clean(resp.text or "")
         if not text:
-            return "I couldn't think of an answer for that one. Try saying it a different way."
+            return "I couldn't think of an answer for that one. Try saying it a different way.", None
+        # Pull out the hidden "PHOTO: ..." search term and strip it from what she sees.
+        photo_query = None
+        m = re.search(r"(?im)^\s*PHOTO\s*[:\-]\s*(.+)$", text)
+        if m:
+            photo_query = m.group(1).strip()
+            text = re.sub(r"(?im)^\s*PHOTO\s*[:\-].*$", "", text).strip()
         remember(chat_id, "user", question)
         remember(chat_id, "model", text)
-        return text + "\n\n" + TAGLINE
+        return text + "\n\n" + TAGLINE, photo_query
     except Exception:
         # Never show mum a stack trace. Quota hits, network drops, bad key all land here.
-        return "Something went wrong. Please wait a moment and try again."
+        return "Something went wrong. Please wait a moment and try again.", None
 
 
 @app.route("/")
@@ -162,21 +189,32 @@ def telegram():
                            "text": "Just tap a button or type what you're cooking, and I'll help."})
         return "ok"
 
+    photo_query = None
     if low.startswith("/idea"):
         tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})
-        reply = coach(chat_id, "Please give me one easy dish idea to cook.")
+        reply, photo_query = coach(chat_id, "Please give me one easy dish idea to cook.")
     elif text in BUTTON_PROMPTS:
         reply = BUTTON_PROMPTS[text]
         remember(chat_id, "user", text)     # so her next message has context
         remember(chat_id, "model", reply)
     else:
         tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})  # shows "typing..." while it thinks
-        reply = coach(chat_id, text[:MAX_INPUT])
+        reply, photo_query = coach(chat_id, text[:MAX_INPUT])
 
     try:
         tg("sendMessage", {"chat_id": chat_id, "text": reply})
     except Exception:
         pass  # if Telegram is unreachable there's nothing more we can do
+
+    # A gentle photo of the finished dish, if we have a search term and a Pexels key.
+    if photo_query:
+        img = dish_photo(photo_query)
+        if img:
+            try:
+                tg("sendPhoto", {"chat_id": chat_id, "photo": img,
+                                 "caption": "A rough idea of how it looks - yours doesn't need to match!"})
+            except Exception:
+                pass
 
     return "ok"
 
